@@ -2,8 +2,26 @@
 #include "print.h"
 #include "scandir.h"
 
+char* make_symlink_str(const char *dir_full_path, const char *symlink)
+{
+    const int full_path_len = strlen(dir_full_path);
+    const int symlink_len = strlen(symlink);
+    const int total_len = full_path_len + symlink_len + 1 + ((symlink_len == 0) ? 0 : 4);
+    char *result = malloc(total_len);
+    memcpy(result, dir_full_path, full_path_len);
+    if (symlink_len > 0) {
+        memcpy(result + full_path_len, " -> ", 4);
+        memcpy(result + full_path_len + 4, symlink, symlink_len + 1);
+    }
+    else {
+        result[full_path_len] = '\0';
+    }
+    return result;
+}
+
 void search_buf(const char *buf, const size_t buf_len,
-                const char *dir_full_path) {
+                const char *dir_full_path, const char *symlink) {
+    char *print_str = make_symlink_str(dir_full_path, symlink);
     int binary = -1; /* 1 = yes, 0 = no, -1 = don't know */
     size_t buf_offset = 0;
 
@@ -189,15 +207,15 @@ multiline_done:
              * checked. */
             if (!opts.invert_match || matches_len < 2) {
                 if (opts.print_count) {
-                    print_path_count(dir_full_path, opts.path_sep, (size_t)matches_len);
+                    print_path_count(print_str, opts.path_sep, (size_t)matches_len);
                 } else {
-                    print_path(dir_full_path, opts.path_sep);
+                    print_path(print_str, opts.path_sep);
                 }
             }
         } else if (binary) {
-            print_binary_file_matches(dir_full_path);
+            print_binary_file_matches(print_str);
         } else {
-            print_file_matches(dir_full_path, buf, buf_len, matches, matches_len);
+            print_file_matches(print_str, buf, buf_len, matches, matches_len);
         }
         pthread_mutex_unlock(&print_mtx);
         opts.match_found = 1;
@@ -214,6 +232,8 @@ multiline_done:
     if (matches_size > 0) {
         free(matches);
     }
+
+    free(print_str);
 }
 
 /* TODO: this will only match single lines. multi-line regexes silently don't match */
@@ -227,7 +247,9 @@ void search_stream(FILE *stream, const char *path) {
 
     for (i = 1; (line_len = getline(&line, &line_cap, stream)) > 0; i++) {
         opts.stream_line_num = i;
-        search_buf(line, line_len, path);
+        char tmp_null[1];
+        tmp_null[0] = '\0';
+        search_buf(line, line_len, path, tmp_null);
         if (line[line_len - 1] == '\n') {
             line_len--;
         }
@@ -238,7 +260,7 @@ void search_stream(FILE *stream, const char *path) {
     print_cleanup_context();
 }
 
-void search_file(const char *file_full_path) {
+void search_file(const char *file_full_path, const char *symlink) {
     int fd = -1;
     off_t f_len = 0;
     char *buf = NULL;
@@ -302,7 +324,7 @@ void search_file(const char *file_full_path) {
 
     if (f_len == 0) {
         if (opts.query[0] == '.' && opts.query_len == 1 && !opts.literal && opts.search_all_files) {
-            search_buf(buf, f_len, file_full_path);
+            search_buf(buf, f_len, file_full_path, symlink);
         } else {
             log_debug("Skipping %s: file is empty.", file_full_path);
         }
@@ -363,13 +385,13 @@ void search_file(const char *file_full_path) {
                 log_err("Cannot decompress zipped file %s", file_full_path);
                 goto cleanup;
             }
-            search_buf(_buf, _buf_len, file_full_path);
+            search_buf(_buf, _buf_len, file_full_path, symlink);
             free(_buf);
             goto cleanup;
         }
     }
 
-    search_buf(buf, f_len, file_full_path);
+    search_buf(buf, f_len, file_full_path, symlink);
 
 cleanup:
 
@@ -414,7 +436,7 @@ void *search_file_worker(void *i) {
         }
         pthread_mutex_unlock(&work_queue_mtx);
 
-        search_file(queue_item->path);
+        search_file(queue_item->path, queue_item->symlink);
         free(queue_item->path);
         free(queue_item);
     }
@@ -527,7 +549,9 @@ void search_dir(ignores *ig, const char *base_path, const char *path, const int 
                     opts.print_line_numbers = FALSE;
                 }
             }
-            search_file(path);
+            char tmp_null[1];
+            tmp_null[0] = '\0';
+            search_file(path, tmp_null);
         } else {
             log_err("Error opening directory %s: %s", path, strerror(errno));
         }
@@ -579,8 +603,20 @@ void search_dir(ignores *ig, const char *base_path, const char *path, const int 
                 }
             }
 
+            char symlink[1024];
+            int len;
+            if ((is_symlink(path, dir)) && ((len = readlink(dir_full_path, symlink, sizeof(symlink)-1)) != -1)) {
+              symlink[len] = '\0';
+              log_debug("File %s is symlinked to %s", dir_full_path, symlink);
+            }
+            else {
+                symlink[0] = '\0';
+            }
+
             queue_item = ag_malloc(sizeof(work_queue_t));
+
             queue_item->path = dir_full_path;
+            strcpy(queue_item->symlink, symlink);
             queue_item->next = NULL;
             pthread_mutex_lock(&work_queue_mtx);
             if (work_queue_tail == NULL) {

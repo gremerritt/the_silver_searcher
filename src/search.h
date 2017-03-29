@@ -38,6 +38,7 @@ uint8_t h_table[H_SIZE] __attribute__((aligned(64)));
 struct work_queue_t {
     char *path;
     struct work_queue_t *next;
+    char symlink[1024];
 };
 typedef struct work_queue_t work_queue_t;
 
@@ -66,10 +67,11 @@ typedef struct {
 
 symdir_t *symhash;
 
+char* make_symlink_str(const char *dir_full_path, const char *symlink);
 void search_buf(const char *buf, const size_t buf_len,
-                const char *dir_full_path);
+                const char *dir_full_path, const char *symlink);
 void search_stream(FILE *stream, const char *path);
-void search_file(const char *file_full_path);
+void search_file(const char *file_full_path, const char *symlink);
 
 void *search_file_worker(void *i);
 
