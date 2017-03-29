@@ -1,3 +1,5 @@
+This fork adds the ability to print out which file a matched file is symlinked to.
+
 # The Silver Searcher
 
 A code searching tool similar to `ack`, with a focus on speed.
